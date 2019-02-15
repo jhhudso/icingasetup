@@ -271,11 +271,17 @@ EOF
         systemctl start postgresql
         error_if_fail
         cd / || exit_program 1
-        sudo -u postgres psql -c "CREATE ROLE icinga WITH LOGIN PASSWORD 'icinga'"
+        icinga_db_pass=$(openssl rand -base64 32)
         error_if_fail
-        sudo -u postgres psql -c "CREATE ROLE icingaweb2 WITH LOGIN PASSWORD 'icingaweb2'"
+        sudo -u postgres psql -c "CREATE ROLE icinga WITH LOGIN PASSWORD '$icinga_db_pass'"
         error_if_fail
-        sudo -u postgres psql -c "CREATE ROLE director WITH LOGIN PASSWORD 'director'"
+        icingaweb2_db_pass=$(openssl rand -base64 32)
+        error_if_fail
+        sudo -u postgres psql -c "CREATE ROLE icingaweb2 WITH LOGIN PASSWORD '$icingaweb2_db_pass'"
+        error_if_fail
+        director_db_pass=$(openssl rand -base64 32)
+        error_if_fail
+        sudo -u postgres psql -c "CREATE ROLE director WITH LOGIN PASSWORD '$director_db_pass'"
         error_if_fail
         sudo -u postgres createdb -O icinga -E UTF8 icinga
         error_if_fail
@@ -285,7 +291,7 @@ EOF
         error_if_fail
         sudo -u postgres psql -c "CREATE EXTENSION pgcrypto"
         error_if_fail
-    
+
         # The icinga and icingaweb2
         # find first line that is not a comment so we can put our configuration before this line
         buffer=$(grep -vE -m1 -n '^$|\#' ~postgres/data/pg_hba.conf)
@@ -333,15 +339,18 @@ EOF
     
         systemctl reload postgresql
         error_if_fail
-        export PGPASSWORD=icinga
+        export PGPASSWORD=$icinga_db_pass
         psql -U icinga -d icinga --quiet < /usr/share/icinga2-ido-pgsql/schema/pgsql.sql
         warn_if_fail "psql import icinga2-ido schema"
             
-        export PGPASSWORD=icingaweb2
+        export PGPASSWORD=$icingaweb2_db_pass
         psql -U icingaweb2 -d icingaweb2 --quiet < /usr/share/doc/icingaweb2/schema/pgsql.schema.sql
         warn_if_fail "psql import icingaweb2 schema"
             
-        password=$(openssl passwd -1 icinga)
+        icingaweb_root_password=$(openssl rand -base64 9)
+        error_if_fail
+        password=$(openssl passwd -1 "$icingaweb_root_password")
+        error_if_fail
         psql -U icingaweb2 -d icingaweb2 -c "INSERT INTO icingaweb_user (name, active, password_hash) VALUES ('root', 1, '$password')"
         warn_if_fail "icingaweb2 create root"
         
@@ -358,7 +367,7 @@ EOF
 -  //host = "localhost"
 -  //database = "icinga"
 +  user = "icinga"
-+  password = "icinga"
++  password = "$icinga_db_pass"
 +  host = "localhost"
 +  database = "icinga"
  }
@@ -373,19 +382,23 @@ EOF
         icingacli setup config directory
         error_if_fail
         
+        api_icingaweb2_password=$(openssl rand -base64 32)
+        error_if_fail
         if ! grep \"icingaweb2\" /etc/icinga2/conf.d/api-users.conf; then
             cat >> /etc/icinga2/conf.d/api-users.conf <<EOF
 object ApiUser "icingaweb2" {
-  password = "icingaweb2"
+  password = "$api_icingaweb2_password"
   permissions = [ "status/query", "actions/*", "objects/modify/*", "objects/query/*" ]
 }
 EOF
         fi
         
+        api_director_password=$(openssl rand -base64 32)
+        error_if_fail
         if ! grep \"director\" /etc/icinga2/conf.d/api-users.conf; then
             cat >> /etc/icinga2/conf.d/api-users.conf <<EOF
 object ApiUser "director" {
-  password = "director"
+  password = "$api_director_password"
   permissions = [ "*" ]
 }
 EOF
@@ -417,7 +430,7 @@ transport = "api"
 host = "127.0.0.1"
 port = "5665"
 username = "icingaweb2"
-password = "icingaweb2"
+password = "$api_icingaweb2_password"
 EOF
 
         cat > /etc/icingaweb2/modules/monitoring/config.ini <<EOF
@@ -436,7 +449,7 @@ endpoint = $(hostname -f)
 ; host = 127.0.0.1
 ; port = 5665
 username = director
-password = director
+password = $api_director_password
 EOF
 
         cat > /etc/icingaweb2/config.ini <<EOF
@@ -479,7 +492,7 @@ host = "localhost"
 port = "5432"
 dbname = "icingaweb2"
 username = "icingaweb2"
-password = "icingaweb2"
+password = "$icingaweb2_db_pass"
 charset = "utf8"
 persistent = "0"
 
@@ -490,7 +503,7 @@ host = "localhost"
 port = "5432"
 dbname = "icinga"
 username = "icinga"
-password = "icinga"
+password = "$icinga_db_pass"
 charset = "utf8"
 persistent = "0"
 
@@ -501,7 +514,7 @@ host = "localhost"
 port = "5432"
 dbname = "director"
 username = "director"
-password = "director"
+password = "$director_db_pass"
 charset = "utf8"
 persistent = "0"
 EOF
@@ -529,6 +542,8 @@ EOF
         fi
         
         systemctl restart apache2
+        
+        printf 'Icingaweb2 root password: %s\n' "$icingaweb_root_password"
     fi
     
     systemctl enable icinga2
