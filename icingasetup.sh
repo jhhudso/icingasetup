@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Copyright (C) 2018 Jared H. Hudson
+# Copyright (C) 2018-2019 Jared H. Hudson
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -191,6 +191,40 @@ main() {
             SuSEfirewall2 open DMZ TCP 5665
             SuSEfirewall2
             ;;
+            "12-SP4")
+            if [ ! -f /etc/zypp/repos.d/SUSE_Linux_Enterprise_Software_Development_Kit_12_SP4_x86_64:SLE-SDK12-SP3-Pool.repo ] || \
+            [ ! -f /etc/zypp/repos.d/SUSE_Linux_Enterprise_Software_Development_Kit_12_SP4_x86_64:SLE-SDK12-SP3-Updates.repo ]; then
+                SUSEConnect -p sle-sdk/12.4/x86_64
+            fi
+
+	    SUSEConnect -p PackageHub/12.4/x86_64
+	    
+            rpm --import https://download.opensuse.org/repositories/server:/monitoring/SLE_12_SP4/repodata/repomd.xml.key
+            warn_if_fail "rpm key import"
+            if [ ! -f /etc/zypp/repos.d/server_monitoring.repo ]; then
+                zypper -n ar -c -f https://download.opensuse.org/repositories/server:/monitoring/SLE_12_SP4/server:monitoring.repo
+                error_if_fail "zypper ar server:monitoring.repo"
+            fi
+            
+            # master get DB
+            if [ "$type" = "master" ]; then
+                zypper -n in postgresql96 postgresql96-contrib postgresql96-server
+                warn_if_fail "zypper in postgresql96*"
+            fi
+            
+            # master and satellite get icingaweb setup
+            if [ "$type" != "client" ]; then
+                SuSEfirewall2 open EXT TCP 443
+                SuSEfirewall2 open EXT TCP 80
+                SuSEfirewall2 open DMZ TCP 443
+                SuSEfirewall2 open DMZ TCP 80
+            fi
+            
+            # all node types
+            SuSEfirewall2 open EXT TCP 5665
+            SuSEfirewall2 open DMZ TCP 5665
+            SuSEfirewall2
+            ;;
             "15")
             SUSEConnect    -p sle-module-desktop-applications/15/x86_64
             error_if_fail
@@ -355,7 +389,7 @@ EOF
         warn_if_fail "icingaweb2 create root"
         
         tmpfile=$(mktemp)
-        cat > "$tmpfile" <<'EOF'
+        cat > "$tmpfile" <<EOF
 --- /etc/icinga2/features-available/ido-pgsql.conf.orig 2018-07-04 18:39:13.187301920 -0500
 +++ /etc/icinga2/features-available/ido-pgsql.conf      2018-07-04 18:39:46.503440925 -0500
 @@ -6,8 +6,8 @@
